@@ -19,6 +19,11 @@ build/
 htmlcov/
 .coverage
 
+# Local dev databases & file cache
+*.db
+*.sqlite3
+storage/
+
 # Alembic
 alembic/versions/*.py
 
