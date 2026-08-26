@@ -1,0 +1,51 @@
+# Web framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+
+# Settings & environment
+pydantic-settings==2.6.1
+python-dotenv==1.0.1
+
+# Database
+sqlalchemy==2.0.36
+alembic==1.14.0
+psycopg2-binary==2.9.10
+
+# Security
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+
+# HTTP client (for OAuth flows later)
+httpx==0.28.0
+
+# Google Drive (Phase 2)
+google-auth==2.36.0
+google-auth-oauthlib==1.2.1
+google-api-python-client==2.154.0
+
+# AWS S3 (Phase 2)
+boto3==1.35.80
+
+# Document processing (Phase 3)
+pypdf==5.1.0
+python-docx==1.1.2
+pandas==2.2.3
+pillow==11.0.0
+
+# OCR (Phase 3)
+pytesseract==0.3.13
+
+# Table extraction (Phase 3)
+pdfplumber==0.11.4
+
+# Embeddings & AI (Phase 4-6)
+openai==1.57.2
+tiktoken==0.8.0
+
+# Vector DB (Phase 4)
+qdrant-client==1.12.1
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
+httpx==0.28.0
