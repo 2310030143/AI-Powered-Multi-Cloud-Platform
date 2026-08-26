@@ -23,13 +23,23 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/cloud/google/callback"
-    GOOGLE_SERVICE_ACCOUNT_JSON: str = ""  # path to service account JSON file
+    GOOGLE_SERVICE_ACCOUNT_JSON: str = ""  # path to service account JSON file (unused for the OAuth flow)
+    GOOGLE_SCOPES: list[str] = [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        # Read/browse everything in the user's Drive
+        "https://www.googleapis.com/auth/drive.readonly",
+        # Create files from the app's uploads
+        "https://www.googleapis.com/auth/drive.file",
+    ]
 
-    # AWS
-    AWS_ACCESS_KEY_ID: str = ""
-    AWS_SECRET_ACCESS_KEY: str = ""
-    AWS_REGION: str = "us-east-1"
-    AWS_S3_BUCKET_NAME: str = ""
+    # S3-compatible object storage (Backblaze B2 free tier, AWS S3, MinIO, ...)
+    S3_ACCESS_KEY_ID: str = ""
+    S3_SECRET_ACCESS_KEY: str = ""
+    S3_REGION: str = "us-east-1"
+    S3_BUCKET_NAME: str = ""
+    # Empty → real AWS S3. For Backblaze B2 use e.g. https://s3.us-west-004.backblazeb2.com
+    S3_ENDPOINT_URL: str = ""
 
     # AI / Embeddings
     OPENAI_API_KEY: str = ""
@@ -48,6 +58,8 @@ class Settings(BaseSettings):
     # File upload limits
     MAX_FILE_SIZE_MB: int = 50
     ALLOWED_EXTENSIONS: list[str] = ["pdf", "docx", "txt", "csv", "png", "jpg", "jpeg", "tiff"]
+    # Local cache for downloaded files (used by Phase 3 processing)
+    LOCAL_STORAGE_PATH: str = "./storage"
 
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]

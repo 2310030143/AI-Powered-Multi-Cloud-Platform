@@ -2,9 +2,8 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (
     Column, String, Integer, BigInteger, Text, DateTime,
-    ForeignKey, Enum, JSON, Boolean
+    ForeignKey, Enum, JSON, Boolean, Uuid
 )
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from app.database.session import Base
 import enum
@@ -16,7 +15,8 @@ def utcnow():
 
 class CloudProvider(str, enum.Enum):
     google_drive = "google_drive"
-    aws_s3 = "aws_s3"
+    # Any S3-compatible object storage (Backblaze B2, AWS S3, MinIO, ...)
+    s3 = "s3"
 
 
 class ProcessingStatus(str, enum.Enum):
@@ -38,7 +38,7 @@ class JobType(str, enum.Enum):
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
     email = Column(String(255), unique=True, nullable=False, index=True)
     hashed_password = Column(String(255), nullable=False)
@@ -52,13 +52,16 @@ class User(Base):
 class ConnectedCloudAccount(Base):
     __tablename__ = "connected_cloud_accounts"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id = Column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     provider = Column(Enum(CloudProvider), nullable=False)
     account_identifier = Column(String(255), nullable=False)  # email or bucket name
-    # Tokens are stored as references to secret manager, not raw values
-    access_token_ref = Column(String(512), nullable=True)
-    refresh_token_ref = Column(String(512), nullable=True)
+    # Encrypted credentials (Fernet, key derived from SECRET_KEY) — never raw values
+    access_token_ref = Column(Text, nullable=True)
+    refresh_token_ref = Column(Text, nullable=True)
+    token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    # Provider-specific extras, e.g. {"endpoint_url": ..., "region": ...}
+    extra_data = Column(JSON, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), default=utcnow)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -69,8 +72,8 @@ class ConnectedCloudAccount(Base):
 class Document(Base):
     __tablename__ = "documents"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id = Column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     provider = Column(Enum(CloudProvider), nullable=False)
     external_file_id = Column(String(512), nullable=False)  # Drive file ID or S3 key
     file_name = Column(String(512), nullable=False)
@@ -95,8 +98,8 @@ class Document(Base):
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    document_id = Column(Uuid, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
     chunk_index = Column(Integer, nullable=False)
     page_number = Column(Integer, nullable=True)
     content = Column(Text, nullable=False)
@@ -110,8 +113,8 @@ class DocumentChunk(Base):
 class DocumentTable(Base):
     __tablename__ = "document_tables"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    document_id = Column(Uuid, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
     page_number = Column(Integer, nullable=True)
     table_index = Column(Integer, nullable=False, default=0)
     table_data = Column(JSON, nullable=False)  # list of rows as dicts
@@ -125,8 +128,8 @@ class DocumentTable(Base):
 class ProcessingJob(Base):
     __tablename__ = "processing_jobs"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    document_id = Column(Uuid, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
     job_type = Column(Enum(JobType), nullable=False)
     status = Column(Enum(ProcessingStatus), default=ProcessingStatus.pending)
     error_message = Column(Text, nullable=True)

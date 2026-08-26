@@ -11,19 +11,23 @@ sqlalchemy==2.0.36
 alembic==1.14.0
 psycopg2-binary==2.9.10
 
-# Security
-passlib[bcrypt]==1.7.4
+# Security & auth (Phase 2)
+passlib==1.7.4
+bcrypt==4.0.1            # pinned: passlib 1.7.4 is incompatible with bcrypt >= 4.1 metadata
 python-jose[cryptography]==3.3.0
+cryptography==50.0.1     # Fernet encryption for stored cloud credentials
+email-validator==2.3.0   # Pydantic EmailStr
+python-multipart==0.0.32 # multipart/form-data uploads
 
-# HTTP client (for OAuth flows later)
+# HTTP client (OAuth flows)
 httpx==0.28.0
 
-# Google Drive (Phase 2)
+# Google Drive
 google-auth==2.36.0
 google-auth-oauthlib==1.2.1
 google-api-python-client==2.154.0
 
-# AWS S3 (Phase 2)
+# S3-compatible object storage (Backblaze B2 / AWS S3 / MinIO)
 boto3==1.35.80
 
 # Document processing (Phase 3)
@@ -48,4 +52,3 @@ qdrant-client==1.12.1
 # Testing
 pytest==8.3.4
 pytest-asyncio==0.24.0
-httpx==0.28.0
