@@ -5,6 +5,7 @@ import re
 from fastapi import (
     APIRouter,
     Depends,
+    BackgroundTasks,
     File,
     Form,
     HTTPException,
@@ -21,6 +22,8 @@ from app.config.settings import get_settings
 from app.database.session import get_db
 from app.models.models import CloudProvider, Document, User
 from app.schemas.files import CloudFile, DocumentRead
+from app.schemas.processing import ProcessResponse
+from app.services.document_processing.pipeline import start_processing
 from app.services.registry import get_cloud_service
 from app.utils.logger import get_logger
 
@@ -172,7 +175,7 @@ def upload_file(
     return document
 
 
-@router.post("/{file_id}/import", response_model=DocumentRead)
+@router.post("/{file_id:path}/import", response_model=DocumentRead)
 def import_file(
     file_id: str,
     provider: CloudProvider = Query(...),
@@ -220,11 +223,31 @@ def import_file(
 
 
 
-@router.post("/{file_id}/process")
+@router.post("/{file_id:path}/process", response_model=ProcessResponse, status_code=202)
 def process_file(
     file_id: str,
+    background_tasks: BackgroundTasks,
     provider: CloudProvider = Query(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return {"message": f"Processing {file_id} — coming in Phase 3"}
+    """Process a cloud file that has already been imported (tracked).
+
+    Alias of POST /api/v1/documents/{doc_id}/process for callers working
+    with provider file IDs.
+    """
+    document = (
+        db.query(Document)
+        .filter(
+            Document.user_id == current_user.id,
+            Document.provider == provider,
+            Document.external_file_id == file_id,
+        )
+        .first()
+    )
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="File is not imported yet — POST /api/v1/files/{file_id}/import?provider=... first",
+        )
+    return start_processing(db, document, background_tasks)

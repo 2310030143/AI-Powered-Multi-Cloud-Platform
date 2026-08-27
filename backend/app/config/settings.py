@@ -58,8 +58,15 @@ class Settings(BaseSettings):
     # File upload limits
     MAX_FILE_SIZE_MB: int = 50
     ALLOWED_EXTENSIONS: list[str] = ["pdf", "docx", "txt", "csv", "png", "jpg", "jpeg", "tiff"]
+
     # Local cache for downloaded files (used by Phase 3 processing)
     LOCAL_STORAGE_PATH: str = "./storage"
+
+    # Document processing (Phase 3)
+    CHUNK_SIZE_TOKENS: int = 800
+    CHUNK_OVERLAP_TOKENS: int = 120
+    OCR_MIN_CHARS_PER_PAGE: int = 30
+    OCR_MAX_PAGES: int = 50
 
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]

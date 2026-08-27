@@ -38,6 +38,7 @@ pillow==11.0.0
 
 # OCR (Phase 3)
 pytesseract==0.3.13
+pdf2image==1.17.0
 
 # Table extraction (Phase 3)
 pdfplumber==0.11.4
