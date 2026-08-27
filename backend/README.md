@@ -1,11 +1,14 @@
 # AI-Powered Multi-Cloud File Intelligence Platform — Backend
 
-Phases 1 (Cloud & Backend Foundation) and 2 (Cloud Storage Integration) are complete.
+Phases 1–3 are complete.
 
 - **Phase 1** — FastAPI skeleton, config, PostgreSQL + SQLAlchemy models, logging, health check
 - **Phase 2** — JWT auth, Google Drive OAuth connector, S3-compatible storage connector
   (Backblaze B2 free tier / AWS S3 / MinIO), file listing / download / upload / import,
   file-metadata persistence
+- **Phase 3** — Document processing pipeline: PDF / DOCX / TXT / CSV text extraction,
+  OCR (Tesseract), table extraction (pdfplumber), token-aware chunking with overlap,
+  per-stage job tracking
 
 ### Prerequisites
 
@@ -13,6 +16,16 @@ Phases 1 (Cloud & Backend Foundation) and 2 (Cloud Storage Integration) are comp
 - PostgreSQL 15+ (SQLite also works for quick local demos / tests)
 - A Google Cloud project (for Drive) — free
 - A Backblaze B2 account (for S3-compatible storage) — 10 GB free, no credit card
+- **OCR (optional but recommended):** system packages `tesseract-ocr` + `poppler-utils`
+  ```bash
+  # Debian/Ubuntu
+  sudo apt install tesseract-ocr poppler-utils
+  # macOS
+  brew install tesseract poppler
+  # Windows — installers: https://github.com/UB-Mannheim/tesseract/wiki and poppler-windows
+  ```
+  Without them, text-based documents still process normally; OCR is only needed for
+  scanned PDFs and images (the API returns a clear error telling you to install Tesseract).
 
 ---
 
@@ -67,9 +80,9 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ## Verify the setup
 
-| Check | URL |
-|---|---|
-| Health check | http://localhost:8000/api/v1/health |
+| Check                | URL                                          |
+| -------------------- | -------------------------------------------- |
+| Health check         | http://localhost:8000/api/v1/health          |
 | Interactive API docs | http://localhost:8000/docs (DEBUG=true only) |
 
 Expected health response:
@@ -174,6 +187,42 @@ when downloaded. Uploads are validated against `ALLOWED_EXTENSIONS` and
 
 ---
 
+## Phase 3 — Processing documents
+
+Turn a tracked file into searchable chunks:
+
+```bash
+# Trigger the pipeline (runs in the background)
+curl -X POST "http://localhost:8000/api/v1/documents/<DOC_ID>/process" \
+  -H "Authorization: Bearer <TOKEN>"
+# → 202 {"status": "processing", ...}
+# (equivalent provider-file alias: POST /api/v1/files/<FILE_ID>/process?provider=s3)
+
+# Poll progress — per-stage job details included
+curl "http://localhost:8000/api/v1/documents/<DOC_ID>/status" -H "Authorization: Bearer <TOKEN>"
+
+# Inspect the results
+curl "http://localhost:8000/api/v1/documents/<DOC_ID>/chunks" -H "Authorization: Bearer <TOKEN>"
+curl "http://localhost:8000/api/v1/documents/<DOC_ID>/tables" -H "Authorization: Bearer <TOKEN>"
+```
+
+### Pipeline stages
+
+| Stage            | What happens                                                                                                                                                   |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Download         | File bytes fetched from Drive/B2 and cached under `LOCAL_STORAGE_PATH/<doc_id>/`                                                                               |
+| Text extraction  | `pypdf` (per page), `python-docx` (paragraphs + tables), TXT (utf-8/latin-1), CSV (pandas → `column: value` lines)                                             |
+| OCR              | Images always; PDF pages with no extracted text are OCRed page-by-page (poppler rasterize → Tesseract)                                                         |
+| Table extraction | `pdfplumber` for PDFs; CSVs stored as a native table                                                                                                           |
+| Chunking         | Token-aware chunks (`CHUNK_SIZE_TOKENS=800`, `CHUNK_OVERLAP_TOKENS=120`) with page numbers preserved; tiktoken when available, offline-safe estimate otherwise |
+
+Every stage is recorded in `processing_jobs` (type, status, error, timings) — visible in
+the status endpoint. Reprocessing is safe: chunks, tables and jobs are replaced.
+A scanned file without Tesseract installed fails with an actionable error instead of
+silently producing empty text.
+
+---
+
 ## Run tests
 
 ```bash
@@ -181,8 +230,9 @@ pytest tests/ -v
 ```
 
 The suite runs on SQLite in-memory (no PostgreSQL needed) and mocks the external
-cloud APIs — 37 tests cover auth, both connectors, the files API and metadata
-persistence.
+cloud APIs — 88 tests cover auth, both connectors, the files API, metadata persistence
+and the full processing pipeline. The two real-OCR tests are skipped automatically
+when Tesseract isn't installed on the machine running the tests.
 
 ---
 
@@ -202,7 +252,7 @@ backend/
 │   │           ├── cloud_google.py  # OAuth connect/callback/status (Phase 2)
 │   │           ├── cloud_s3.py      # S3-compatible connect/status  (Phase 2)
 │   │           ├── files.py     # list/download/upload/import     (Phase 2)
-│   │           ├── documents.py # tracked file metadata           (Phase 2)
+│   │           ├── documents.py # metadata + process/chunks/tables (Phases 2-3)
 │   │           ├── ai.py        # search/chat stubs               (Phases 4-5)
 │   │           └── reports.py   # report generation stub          (Phase 6)
 │   ├── config/settings.py       # All config via environment variables
@@ -212,7 +262,9 @@ backend/
 │   │   ├── registry.py          # provider → service factory
 │   │   ├── google_drive/        # OAuth helpers + Drive operations
 │   │   ├── s3_storage/          # boto3 S3-compatible operations
-│   │   └── ...                  # Phase 3+ placeholders
+│   │   ├── document_processing/ # extractors, chunking, pipeline   (Phase 3)
+│   │   ├── ocr/                 # Tesseract wrapper                (Phase 3)
+│   │   └── table_extraction/    # pdfplumber wrapper               (Phase 3)
 │   ├── database/session.py      # DB engine, session, Base
 │   └── utils/
 │       ├── logger.py            # Structured logging
@@ -228,21 +280,24 @@ backend/
 
 ## Environment Variables
 
-| Variable | Description | Required Now |
-|---|---|---|
-| `SECRET_KEY` | JWT signing + credential-encryption key | Yes |
-| `DATABASE_URL` | PostgreSQL (or SQLite) connection string | Yes |
-| `GOOGLE_CLIENT_ID` | Google OAuth client ID | For Drive |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret | For Drive |
-| `GOOGLE_REDIRECT_URI` | OAuth callback URL | No (default) |
-| `S3_ACCESS_KEY_ID` | S3/B2 access key (keyID for B2) | For S3/B2 |
-| `S3_SECRET_ACCESS_KEY` | S3/B2 secret key | For S3/B2 |
-| `S3_REGION` | Storage region | No |
-| `S3_BUCKET_NAME` | Bucket name | For S3/B2 |
-| `S3_ENDPOINT_URL` | Empty = AWS S3; B2 endpoint for Backblaze | For B2 |
-| `LOCAL_STORAGE_PATH` | Local cache for downloaded files | No |
-| `OPENAI_API_KEY` | OpenAI API key | Phase 4 |
-| `QDRANT_URL` | Qdrant vector DB URL | Phase 4 |
+| Variable               | Description                               | Required Now |
+| ---------------------- | ----------------------------------------- | ------------ |
+| `SECRET_KEY`           | JWT signing + credential-encryption key   | Yes          |
+| `DATABASE_URL`         | PostgreSQL (or SQLite) connection string  | Yes          |
+| `GOOGLE_CLIENT_ID`     | Google OAuth client ID                    | For Drive    |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret                | For Drive    |
+| `GOOGLE_REDIRECT_URI`  | OAuth callback URL                        | No (default) |
+| `S3_ACCESS_KEY_ID`     | S3/B2 access key (keyID for B2)           | For S3/B2    |
+| `S3_SECRET_ACCESS_KEY` | S3/B2 secret key                          | For S3/B2    |
+| `S3_REGION`            | Storage region                            | No           |
+| `S3_BUCKET_NAME`       | Bucket name                               | For S3/B2    |
+| `S3_ENDPOINT_URL`      | Empty = AWS S3; B2 endpoint for Backblaze | For B2       |
+| `LOCAL_STORAGE_PATH`   | Local cache for downloaded files          | No           |
+| `CHUNK_SIZE_TOKENS`    | Target size for generated chunks          | No           |
+| `CHUNK_OVERLAP_TOKENS` | Overlap between consecutive chunks        | No           |
+| `OCR_MAX_PAGES`        | Maximum PDF pages processed by OCR        | No           |
+| `OPENAI_API_KEY`       | OpenAI API key                            | Phase 4      |
+| `QDRANT_URL`           | Qdrant vector DB URL                      | Phase 4      |
 
 ---
 
@@ -253,9 +308,6 @@ backend/
 1. Go to https://console.cloud.google.com and create a project
 2. Enable the **Google Drive API**
 3. Configure the OAuth consent screen (External; add yourself as a Test user)
-4. Create OAuth 2.0 credentials → Web Application
-   - Authorized redirect URI: `http://localhost:8000/api/v1/cloud/google/callback`
-5. Store `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `.env`
 
 ### Backblaze B2 (free 10 GB, no credit card)
 
@@ -274,8 +326,8 @@ backend/
 
 ---
 
-## Next Step — Phase 3
+## Next Step — Phase 4
 
-Document processing: PDF / DOCX / TXT / CSV text extraction, OCR (Tesseract),
-table extraction (pdfplumber), and document chunking with the `documents`
-processing-pipeline tables.
+Embeddings & vector search: generate embeddings for the stored chunks
+(OpenAI `text-embedding-3-small`), configure Qdrant, store vectors with metadata,
+and implement similarity search with metadata filtering.
