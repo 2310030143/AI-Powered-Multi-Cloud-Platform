@@ -21,6 +21,21 @@ def get_connected_account(
     )
 
 
+def get_any_connected_account(
+    db: Session, user: User, provider: CloudProvider
+) -> ConnectedCloudAccount | None:
+    """Like get_connected_account but ignores the is_active flag — used to
+    detect an explicitly disconnected account (sticky disconnect)."""
+    return (
+        db.query(ConnectedCloudAccount)
+        .filter(
+            ConnectedCloudAccount.user_id == user.id,
+            ConnectedCloudAccount.provider == provider,
+        )
+        .first()
+    )
+
+
 def get_cloud_service(db: Session, user: User, provider: CloudProvider):
     """Return a service object for the provider (GoogleDriveService or
     S3StorageService), raising HTTPException(400) when it isn't connected."""

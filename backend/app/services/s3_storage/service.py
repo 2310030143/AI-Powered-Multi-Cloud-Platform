@@ -170,18 +170,29 @@ class S3StorageService:
 
 
 def get_s3_service_for_user(db: Session, user: User) -> S3StorageService:
-    """Resolve the S3 service for a user: their stored (encrypted) credentials
-    if they connected a bucket, otherwise the server-level S3_* environment."""
+    """Resolve the S3 service for a user.
+
+    Resolution order:
+    1. The user's stored connection (if active) — their per-user credentials
+    2. An inactive record → the user explicitly disconnected: access is fully
+       blocked (the server-level fallback deliberately does NOT apply) until
+       they reconnect via POST /cloud/s3/connect
+    3. No record at all — server-level S3_* environment credentials
+    """
     account = (
         db.query(ConnectedCloudAccount)
         .filter(
             ConnectedCloudAccount.user_id == user.id,
             ConnectedCloudAccount.provider == CloudProvider.s3,
-            ConnectedCloudAccount.is_active.is_(True),
         )
         .first()
     )
     if account is not None:
+        if not account.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail="S3 storage is disconnected for this account — POST /api/v1/cloud/s3/connect to reconnect",
+            )
         extra = account.extra_data or {}
         return S3StorageService(
             bucket_name=account.account_identifier,

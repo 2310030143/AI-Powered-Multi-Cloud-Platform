@@ -156,6 +156,13 @@ body is empty, the server falls back to the `S3_*` environment variables — so 
 can also configure the bucket once in `.env` and skip the connect call entirely.
 Leave `S3_ENDPOINT_URL` empty to talk to real AWS S3 instead of B2 (same code path).
 
+**S3 connection states:**
+- *Never connected* → the server's `S3_*` env credentials are used automatically
+- *Connected* → your per-user credentials (encrypted at rest) are used
+- *Disconnected* → S3 access is **fully blocked** until you reconnect; the env
+  fallback deliberately does not apply after an explicit disconnect
+
+
 ### 4. List, download, upload and import files
 
 ```bash
