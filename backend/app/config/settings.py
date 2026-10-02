@@ -89,8 +89,8 @@ class Settings(BaseSettings):
     OCR_MIN_CHARS_PER_PAGE: int = 30
     OCR_MAX_PAGES: int = 50
 
-    # CORS
-    CORS_ORIGINS: list[str] = ["http://localhost:3000"]
+    # CORS — includes the Vite dev server (frontend, Phase 7) for local development
+    CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]
 
 
 @lru_cache

@@ -612,8 +612,27 @@ backend/
 
 ---
 
-## Next Step — Phase 7
+## Frontend (Phase 7)
 
-Frontend dashboard: cloud connections, document browser, upload/import,
-semantic search, AI chat, summaries, report generation, processing status
-and document metadata.
+A React + TypeScript dashboard for this backend lives in `frontend/`:
+
+```bash
+cd frontend
+npm install
+npm run dev        # http://localhost:5173 (proxies /api to the backend)
+```
+
+Configuration: `frontend/.env.example` (`VITE_API_BASE_URL`; the default
+`/api/v1` uses the Vite dev proxy, so no CORS setup is needed for local
+development — the backend also allows `http://localhost:5173` by default).
+Build for production with `npm run build` (output in `frontend/dist/`).
+Frontend tests: `npm test` · type checking: `npm run typecheck`.
+
+The dashboard covers cloud connections, document browsing, upload/import,
+semantic search, AI chat, summarization, report generation, multi-document
+analysis and processing status — using only the existing Phase 1–6 APIs.
+
+## Next Step — Phase 8
+
+Testing & deployment: integration tests, cloud integration tests, RAG
+evaluation, security testing, monitoring and production deployment.
