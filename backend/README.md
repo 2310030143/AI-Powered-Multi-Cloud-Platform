@@ -1,6 +1,6 @@
 # AI-Powered Multi-Cloud File Intelligence Platform — Backend
 
-Phases 1–4 are complete.
+Phases 1–5 are complete.
 
 - **Phase 1** — FastAPI skeleton, config, PostgreSQL + SQLAlchemy models, logging, health check
 - **Phase 2** — JWT auth, Google Drive OAuth connector, S3-compatible storage connector
@@ -12,6 +12,9 @@ Phases 1–4 are complete.
 - **Phase 4** — Embeddings & vector search: **Jina AI** embeddings (`jina-embeddings-v3`)
   stored in **Qdrant**, automatic embedding during processing, semantic search with
   metadata filtering and strict per-user isolation
+- **Phase 5** — RAG: retrieval-augmented chat over the user's documents with the
+  **NVIDIA hosted LLM** (`nvidia/nemotron-3.5-lightning-30b-a3b`), bounded
+  injection-hardened context construction and application-side source attribution
 
 ### Prerequisites
 
@@ -326,6 +329,89 @@ another user's results.
 
 ---
 
+## Phase 5 — RAG chat (NVIDIA hosted LLM)
+
+Ask questions about your own documents: the answer is generated **only** from your
+retrieved chunks, with traceable sources.
+
+### Architecture
+
+```
+User question
+   → query processing (validation + normalization)
+   → Jina query embedding (retrieval.query task)          [Phase 4]
+   → Qdrant semantic retrieval (scoped to the user)       [Phase 4]
+   → PostgreSQL chunk hydration (authoritative text)      [Phase 4]
+   → bounded context construction (RAG_MAX_CONTEXT_CHUNKS / RAG_MAX_CONTEXT_CHARS)
+   → NVIDIA hosted LLM (chat completions, thinking disabled)
+   → answer + source attribution built by the application from retrieval results
+```
+
+The LLM never constructs citations — `sources` is built from the exact chunks
+supplied in the context, so nothing can be invented. If nothing relevant is found,
+the LLM is not called and a deterministic "couldn't find relevant information"
+answer is returned with an empty source list.
+
+### Prompt-injection handling
+
+Retrieved document content (including OCR text and filenames) is treated as
+**untrusted data**, never as instructions:
+
+- every chunk is wrapped in `<document>...</document>` blocks in the context
+- the system prompt separates **TRUSTED INSTRUCTIONS** from **UNTRUSTED DATA** and
+  explicitly instructs the model to keep following application instructions when a
+  document says things like "ignore previous instructions"
+- document content cannot break out of its wrapper (closing tags inside content
+  are neutralized) and metadata is flattened so it cannot forge context structure
+
+This is a practical application-level defense, not a guarantee — prompt injection
+cannot be eliminated entirely in this architecture.
+
+### Configuration
+
+```env
+NVIDIA_API_KEY=            # key from https://build.nvidia.com/
+NVIDIA_MODEL=nvidia/nemotron-3.5-lightning-30b-a3b
+NVIDIA_TIMEOUT_SECONDS=30
+RAG_MAX_CONTEXT_CHUNKS=8
+RAG_MAX_CONTEXT_CHARS=24000
+```
+
+Both the Jina key (Phase 4 retrieval) and the NVIDIA key are required for chat.
+
+### Using the chat API
+
+```bash
+curl -X POST http://localhost:8000/api/v1/chat \
+  -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/json" \
+  -d '{"message": "What is semantic search?"}'
+```
+
+Response:
+
+```json
+{
+  "message": "What is semantic search?",
+  "answer": "According to your notes, semantic search retrieves information based on meaning rather than exact keyword matching.",
+  "sources": [
+    {
+      "document_id": "3f2b...",
+      "chunk_id": "9a1c...",
+      "filename": "phase34-test.txt",
+      "page_number": 1,
+      "score": 0.42
+    }
+  ]
+}
+```
+
+Optional parameters: `"limit": 5` (1–20) and `"min_score": 0.2` (0–1) tune retrieval.
+Retrieval is always scoped to the authenticated user. Errors: `401` unauthenticated,
+`422` invalid input, `503` not configured, `502` upstream Jina/Qdrant/NVIDIA failures
+(sanitized messages — no stack traces, keys or internal details).
+
+---
+
 ## Run tests
 
 ```bash
@@ -403,6 +489,11 @@ backend/
 | `EMBEDDING_MODEL`      | Jina embedding model                      | No (default) |
 | `EMBEDDING_DIMENSIONS` | Embedding vector size                     | No (default) |
 | `QDRANT_URL`           | Qdrant vector DB URL (or `:memory:`)      | For Phase 4+ |
+| `NVIDIA_API_KEY`       | NVIDIA hosted LLM API key                 | For Phase 5+ |
+| `NVIDIA_MODEL`         | LLM model for RAG generation              | No (default) |
+| `NVIDIA_TIMEOUT_SECONDS` | LLM request timeout (seconds)           | No (default) |
+| `RAG_MAX_CONTEXT_CHUNKS` | Max chunks supplied to the LLM          | No (default) |
+| `RAG_MAX_CONTEXT_CHARS` | Max characters of constructed context     | No (default) |
 
 ---
 
@@ -431,8 +522,7 @@ backend/
 
 ---
 
-## Next Step — Phase 5
+## Next Step — Phase 6
 
-Retrieval-Augmented Generation: query processing, semantic retrieval, context
-construction, LLM integration, source attribution and the RAG chat API — built on
-top of the Phase 4 embeddings and Qdrant search.
+AI features: document summarization, report generation and multi-document
+analysis — built on the Phase 4/5 retrieval and generation stack.

@@ -47,7 +47,15 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "jina-embeddings-v3"
     EMBEDDING_DIMENSIONS: int = 1024
     EMBEDDING_BATCH_SIZE: int = 64
-    LLM_MODEL: str = "gpt-4o-mini"
+
+    # RAG generation — NVIDIA hosted LLM (OpenAI-compatible chat completions)
+    NVIDIA_API_KEY: str = ""
+    NVIDIA_MODEL: str = "nvidia/nemotron-3.5-lightning-30b-a3b"
+    NVIDIA_TIMEOUT_SECONDS: int = 30
+
+    # RAG context construction limits
+    RAG_MAX_CONTEXT_CHUNKS: int = 8
+    RAG_MAX_CONTEXT_CHARS: int = 24000
 
     # Vector DB (Qdrant)
     QDRANT_URL: str = "http://localhost:6333"

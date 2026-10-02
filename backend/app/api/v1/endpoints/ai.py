@@ -6,9 +6,13 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.database.session import get_db
 from app.models.models import Document, DocumentChunk, User
+from app.schemas.chat import ChatRequest, ChatResponse
 from app.schemas.search import SearchRequest, SearchResponse, SearchHit
 from app.services.embeddings.base import EmbeddingError
 from app.services.embeddings.manager import embedding_available, get_embedding_provider
+from app.services.llm.base import LLMError
+from app.services.llm.manager import llm_configured
+from app.services.rag.service import answer_question
 from app.services.vector_store.qdrant_store import QdrantVectorStore, VectorStoreError
 from app.utils.logger import get_logger
 
@@ -90,7 +94,49 @@ def semantic_search(
     return SearchResponse(query=payload.query, total=len(results), results=results)
 
 
-@router.post("/chat")
-def rag_chat():
-    """RAG chat — coming in Phase 5."""
-    return {"message": "RAG chat — coming in Phase 5"}
+@router.post("/chat", response_model=ChatResponse)
+def rag_chat(
+    payload: ChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Retrieval-augmented chat over the user's own documents.
+
+    Flow: query processing → Jina query embedding → Qdrant semantic retrieval
+    (user-scoped) → PostgreSQL chunk hydration → bounded, injection-hardened
+    context construction → NVIDIA hosted LLM → answer with application-side
+    source attribution. With no relevant chunks a controlled answer is
+    returned and the LLM is not called.
+    """
+    if not embedding_available():
+        raise HTTPException(
+            status_code=503,
+            detail="RAG is not configured — set JINA_API_KEY (and QDRANT_URL) on the server",
+        )
+    if not llm_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="RAG is not configured — set NVIDIA_API_KEY on the server",
+        )
+
+    try:
+        result = answer_question(
+            db=db,
+            user=current_user,
+            message=payload.message,
+            limit=payload.limit,
+            min_score=payload.min_score,
+        )
+    except (EmbeddingError, VectorStoreError, LLMError) as exc:
+        # Upstream failures (Jina / Qdrant / NVIDIA) — sanitized messages only
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected RAG failure for user %s", current_user.email)
+        raise HTTPException(
+            status_code=500,
+            detail="An internal error occurred while processing the chat request",
+        )
+
+    return ChatResponse(**result)
