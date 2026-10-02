@@ -16,10 +16,14 @@ from app.models.models import (
     ProcessingStatus,
     User,
 )
+from app.schemas.ai_features import SummarizeResponse
 from app.schemas.files import DocumentListResponse, DocumentRead
 from app.schemas.processing import ChunkListResponse, ProcessResponse, TableListResponse
 from app.schemas.search import EmbedResponse
+from app.services.ai.summarization import summarize_document as summarize_document_service
 from app.services.document_processing.pipeline import start_processing
+from app.services.llm.base import LLMError
+from app.services.llm.manager import llm_configured
 from app.services.embeddings.base import EmbeddingError
 from app.services.embeddings.manager import embed_document_chunks, embedding_available
 from app.services.vector_store.qdrant_store import VectorStoreError
@@ -206,11 +210,28 @@ def list_tables(
     return TableListResponse(total=len(items), items=items)
 
 
-@router.post("/{doc_id}/summarize")
+@router.post("/{doc_id}/summarize", response_model=SummarizeResponse)
 def summarize_document(
     doc_id: UUID,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    _get_document_or_404(db, current_user, doc_id)
-    return {"message": f"Summarize {doc_id} — coming in Phase 6"}
+    """Generate a concise AI summary of a processed document (owned by the
+    authenticated user) from its extracted chunk content."""
+    if not llm_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="AI features are not configured — set NVIDIA_API_KEY or OLLAMA_MODEL on the server",
+        )
+    document = _get_document_or_404(db, current_user, doc_id)
+    try:
+        return summarize_document_service(db=db, user=current_user, document=document)
+    except LLMError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected summarization failure for document %s", doc_id)
+        raise HTTPException(
+            status_code=500, detail="An internal error occurred while summarizing the document"
+        )

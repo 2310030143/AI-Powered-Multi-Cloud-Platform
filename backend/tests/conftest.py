@@ -1,15 +1,46 @@
 """Shared test fixtures.
 
-Environment variables are set BEFORE any app import so that the cached
-Settings object picks up the test configuration (SQLite in-memory DB).
+CRITICAL — configuration isolation:
+Environment variables are set BEFORE any app import. pydantic-settings gives
+real environment variables precedence over the developer's ``.env`` file, so
+force-setting them here pins the entire test configuration. The suite is
+therefore deterministic NO MATTER what the developer's local ``.env``
+contains — tests can never see real JINA/NVIDIA/Ollama/S3 credentials and can
+never make real external requests. Individual tests that need a service
+"configured" monkeypatch the setting explicitly (existing pattern).
+
+All external services default to UNCONFIGURED for the suite:
+- JINA_API_KEY / NVIDIA_API_KEY empty  → embedding/LLM report "not configured"
+- OLLAMA_MODEL empty                    → the Ollama fallback is disabled
+- QDRANT_URL=':memory:'                 → embedded Qdrant, no server needed
+- S3_* empty                            → no accidental cloud fallback
+- LOCAL_STORAGE_PATH → temp dir         → tests never write into ./storage/
 """
 import os
+import tempfile
 
-os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production")
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
-os.environ.setdefault("APP_ENV", "test")
-os.environ.setdefault("GOOGLE_CLIENT_ID", "test-client-id.apps.googleusercontent.com")
-os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-client-secret")
+# ── Application configuration (forced, not setdefault — .env must not leak) ──
+os.environ["SECRET_KEY"] = "test-secret-key-not-for-production"
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["APP_ENV"] = "test"
+os.environ["LOCAL_STORAGE_PATH"] = tempfile.mkdtemp(prefix="ai-platform-tests-")
+
+# ── External AI services: always unconfigured unless a test opts in ──────────
+os.environ["JINA_API_KEY"] = ""
+os.environ["NVIDIA_API_KEY"] = ""
+os.environ["OLLAMA_MODEL"] = ""
+
+# ── Vector DB: embedded in-memory mode — never a real Qdrant server ──────────
+os.environ["QDRANT_URL"] = ":memory:"
+os.environ["QDRANT_API_KEY"] = ""
+
+# ── Cloud providers: no accidental fallback to real .env credentials ─────────
+os.environ["S3_ACCESS_KEY_ID"] = ""
+os.environ["S3_SECRET_ACCESS_KEY"] = ""
+os.environ["S3_BUCKET_NAME"] = ""
+os.environ["S3_ENDPOINT_URL"] = ""
+os.environ["GOOGLE_CLIENT_ID"] = "test-client-id.apps.googleusercontent.com"
+os.environ["GOOGLE_CLIENT_SECRET"] = "test-client-secret"
 
 import pytest
 from fastapi.testclient import TestClient

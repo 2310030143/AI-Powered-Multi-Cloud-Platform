@@ -53,9 +53,19 @@ class Settings(BaseSettings):
     NVIDIA_MODEL: str = "nvidia/nemotron-3.5-lightning-30b-a3b"
     NVIDIA_TIMEOUT_SECONDS: int = 30
 
+    # Local Ollama fallback LLM (optional — NVIDIA stays primary).
+    # Empty OLLAMA_MODEL disables the fallback; nothing is downloaded automatically.
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = ""
+    OLLAMA_TIMEOUT_SECONDS: int = 60
+
     # RAG context construction limits
     RAG_MAX_CONTEXT_CHUNKS: int = 8
     RAG_MAX_CONTEXT_CHARS: int = 24000
+
+    # AI features (Phase 6)
+    AI_MAX_DOCUMENTS: int = 10         # max documents per report/analysis request
+    AI_CHUNKS_PER_DOCUMENT: int = 6    # chunk selection cap per document
 
     # Vector DB (Qdrant)
     QDRANT_URL: str = "http://localhost:6333"

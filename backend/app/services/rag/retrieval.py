@@ -22,8 +22,8 @@ class RetrievedChunk:
     document_id: str | None
     file_name: str | None
     page_number: int | None
-    score: float
-    content: str
+    score: float | None = None  # similarity score when semantically retrieved
+    content: str = ""
 
 
 def retrieve_chunks(

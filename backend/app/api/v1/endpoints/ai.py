@@ -116,7 +116,7 @@ def rag_chat(
     if not llm_configured():
         raise HTTPException(
             status_code=503,
-            detail="RAG is not configured — set NVIDIA_API_KEY on the server",
+            detail="RAG is not configured — set NVIDIA_API_KEY or OLLAMA_MODEL on the server",
         )
 
     try:

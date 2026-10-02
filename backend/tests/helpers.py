@@ -62,3 +62,55 @@ def make_docx(paragraphs: list[str], table_rows: list[list[str]] | None = None) 
     buffer = io.BytesIO()
     document.save(buffer)
     return buffer.getvalue()
+
+
+class FakeCloudService:
+    """Cloud provider stand-in serving files from an in-memory dict
+    (shared by the Phase 6 AI-feature tests)."""
+
+    def __init__(self, files: dict[str, bytes]):
+        self.files = files
+
+    def get_file(self, file_id):
+        import mimetypes
+
+        from fastapi import HTTPException
+
+        if file_id not in self.files:
+            raise HTTPException(status_code=404, detail="File not found")
+        name = file_id.rsplit("/", 1)[-1]
+        return {
+            "provider": "s3", "file_id": file_id, "name": name,
+            "mime_type": mimetypes.guess_type(name)[0] or "application/octet-stream",
+            "size": len(self.files[file_id]), "modified_at": None,
+            "is_folder": False, "parent_id": None,
+        }
+
+    def download_file(self, file_id):
+        import io
+
+        from fastapi import HTTPException
+
+        if file_id not in self.files:
+            raise HTTPException(status_code=404, detail="File not found")
+        return file_id, io.BytesIO(self.files[file_id]), "text/plain"
+
+
+class RecordingLLM:
+    """LLM provider fake that records (system_prompt, user_message) calls."""
+
+    def __init__(self, answer="FAKE ANSWER", error=None):
+        self.answer = answer
+        self.error = error
+        self.calls = []
+        self.last_provider = "nvidia"
+
+    @property
+    def model(self):
+        return "fake-model"
+
+    def generate_answer(self, system_prompt, user_message):
+        if self.error is not None:
+            raise self.error
+        self.calls.append((system_prompt, user_message))
+        return self.answer

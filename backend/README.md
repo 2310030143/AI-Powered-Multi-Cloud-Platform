@@ -1,6 +1,6 @@
 # AI-Powered Multi-Cloud File Intelligence Platform — Backend
 
-Phases 1–5 are complete.
+Phases 1–6 are complete.
 
 - **Phase 1** — FastAPI skeleton, config, PostgreSQL + SQLAlchemy models, logging, health check
 - **Phase 2** — JWT auth, Google Drive OAuth connector, S3-compatible storage connector
@@ -15,6 +15,10 @@ Phases 1–5 are complete.
 - **Phase 5** — RAG: retrieval-augmented chat over the user's documents with the
   **NVIDIA hosted LLM** (`nvidia/nemotron-3.5-lightning-30b-a3b`), bounded
   injection-hardened context construction and application-side source attribution
+- **Phase 6** — AI features: document summarization, strictly-validated structured
+  report generation and multi-document analysis, with NVIDIA as the primary LLM
+  and an **optional local Ollama fallback** (explicit provider order, centralized
+  in the LLM manager)
 
 ### Prerequisites
 
@@ -412,6 +416,87 @@ Retrieval is always scoped to the authenticated user. Errors: `401` unauthentica
 
 ---
 
+## Phase 6 — AI features (summarization, reports, multi-document analysis)
+
+### LLM architecture: NVIDIA primary, optional Ollama fallback
+
+```
+AI feature services (summarization / reports / analysis) — and Phase 5 RAG
+        ↓
+   LLM Manager (centralized fallback)
+        ↓ 1. NVIDIA hosted API  (primary)
+        ↓ 2. local Ollama       (fallback — only on provider/runtime failures)
+```
+
+- NVIDIA is always attempted first; Ollama is tried only when NVIDIA fails with
+  a recoverable provider/configuration/connectivity error
+- Ollama is **fully optional**: the app starts and the whole test suite runs
+  without it. To enable the fallback, set `OLLAMA_MODEL` — models are never
+  downloaded automatically; run `ollama pull <model>` yourself first
+- aggregate provider errors are sanitized (no response bodies, headers or keys)
+- bad user input never triggers fallback — that is for provider failures only
+
+### Configuration
+
+```env
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=               # empty = fallback disabled
+OLLAMA_TIMEOUT_SECONDS=60
+AI_MAX_DOCUMENTS=10         # max documents per report/analysis request
+AI_CHUNKS_PER_DOCUMENT=6    # chunk selection cap per document
+```
+
+### Endpoints (all authenticated, user-isolated, injection-hardened)
+
+**Document summarization** — summarize a processed document from its chunks:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/documents/<DOC_ID>/summarize" \
+  -H "Authorization: Bearer <TOKEN>"
+# → {"document_id", "filename", "summary", "sources": [...], "provider"}
+```
+
+**Report generation** — strictly validated structured report (an incomplete
+report is rejected with 502, never returned as a 200):
+
+```bash
+curl -X POST http://localhost:8000/api/v1/reports/generate \
+  -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/json" \
+  -d '{"document_ids": ["<DOC_ID_1>", "<DOC_ID_2>"], "instruction": "Compare both documents"}'
+# → {"instruction", "report": {"executive_summary", "key_findings", "evidence",
+#                              "recommendations", "conclusion"}, "sources", "provider"}
+```
+
+**Multi-document analysis** — answer a question across documents:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/analysis/multi-document \
+  -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/json" \
+  -d '{"document_ids": ["<DOC_ID_1>", "<DOC_ID_2>"], "question": "How do these differ?"}'
+# → {"question", "analysis", "sources", "provider"}
+```
+
+Behavior shared by all three: ownership is verified for every requested document
+(foreign/missing IDs return a non-enumerating 404); content comes from the
+authoritative PostgreSQL chunks, selected per document and assembled round-robin
+so no single document monopolizes the context; the Phase 5 context builder
+applies `RAG_MAX_CONTEXT_CHUNKS` / `RAG_MAX_CONTEXT_CHARS` and the
+`<document>` untrusted-data wrapping (prompt-injection hardening); `sources` is
+built application-side. The `provider` field reports which LLM answered
+(`nvidia` or `ollama`).
+
+### Optional: manual Ollama setup for fallback testing
+
+```bash
+# 1. Install Ollama (https://ollama.com) and start it (default port 11434)
+# 2. Pull a model yourself — the app never downloads models:
+ollama pull llama3.1
+# 3. Enable the fallback in .env:
+#    OLLAMA_MODEL=llama3.1
+```
+
+---
+
 ## Run tests
 
 ```bash
@@ -493,6 +578,11 @@ backend/
 | `NVIDIA_MODEL`         | LLM model for RAG generation              | No (default) |
 | `NVIDIA_TIMEOUT_SECONDS` | LLM request timeout (seconds)           | No (default) |
 | `RAG_MAX_CONTEXT_CHUNKS` | Max chunks supplied to the LLM          | No (default) |
+| `OLLAMA_BASE_URL`      | Local Ollama URL (fallback provider)       | No (default) |
+| `OLLAMA_MODEL`         | Ollama model — empty disables fallback     | For fallback |
+| `OLLAMA_TIMEOUT_SECONDS` | Ollama request timeout (seconds)         | No (default) |
+| `AI_MAX_DOCUMENTS`     | Max documents per report/analysis request  | No (default) |
+| `AI_CHUNKS_PER_DOCUMENT` | Chunk selection cap per document         | No (default) |
 | `RAG_MAX_CONTEXT_CHARS` | Max characters of constructed context     | No (default) |
 
 ---
@@ -522,7 +612,8 @@ backend/
 
 ---
 
-## Next Step — Phase 6
+## Next Step — Phase 7
 
-AI features: document summarization, report generation and multi-document
-analysis — built on the Phase 4/5 retrieval and generation stack.
+Frontend dashboard: cloud connections, document browser, upload/import,
+semantic search, AI chat, summaries, report generation, processing status
+and document metadata.
