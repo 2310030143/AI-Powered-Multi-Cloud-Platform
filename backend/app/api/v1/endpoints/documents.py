@@ -1,4 +1,5 @@
 from uuid import UUID
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -10,13 +11,18 @@ from app.models.models import (
     Document,
     DocumentChunk,
     DocumentTable,
+    JobType,
     ProcessingJob,
     ProcessingStatus,
     User,
 )
 from app.schemas.files import DocumentListResponse, DocumentRead
 from app.schemas.processing import ChunkListResponse, ProcessResponse, TableListResponse
+from app.schemas.search import EmbedResponse
 from app.services.document_processing.pipeline import start_processing
+from app.services.embeddings.base import EmbeddingError
+from app.services.embeddings.manager import embed_document_chunks, embedding_available
+from app.services.vector_store.qdrant_store import VectorStoreError
 from app.utils.logger import get_logger
 
 router = APIRouter()
@@ -99,11 +105,70 @@ def process_document(
     db: Session = Depends(get_db),
 ):
     """Run the processing pipeline: download → extract text → OCR (if needed)
-    → extract tables → chunk. Runs in the background; poll the status endpoint."""
+    → extract tables → chunk → embed (when configured). Runs in the
+    background; poll the status endpoint."""
     document = _get_document_or_404(db, current_user, doc_id)
     result = start_processing(db, document, background_tasks)
     logger.info("Processing triggered for document %s", document.id)
     return result
+
+
+@router.post("/{doc_id}/embed", response_model=EmbedResponse)
+def embed_document(
+    doc_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """(Re-)embed a processed document's chunks into the vector database.
+
+    Generates Jina embeddings for every chunk and upserts the vectors into
+    Qdrant (existing vectors for the document are replaced — safe to retry,
+    never duplicates). Records an `embedding` processing job.
+    """
+    document = _get_document_or_404(db, current_user, doc_id)
+    if not embedding_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Embeddings are not configured — set JINA_API_KEY (and QDRANT_URL) on the server",
+        )
+    if document.processing_status == ProcessingStatus.processing:
+        raise HTTPException(status_code=409, detail="Document is currently being processed")
+    chunk_count = db.query(DocumentChunk).filter(DocumentChunk.document_id == document.id).count()
+    if chunk_count == 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Document has no chunks to embed — process it first (POST /documents/{id}/process)",
+        )
+
+    job = ProcessingJob(
+        document_id=document.id,
+        job_type=JobType.embedding,
+        status=ProcessingStatus.processing,
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(job)
+    db.commit()
+    try:
+        result = embed_document_chunks(db, document)
+    except (EmbeddingError, VectorStoreError) as exc:
+        job.status = ProcessingStatus.failed
+        job.error_message = str(exc)[:2000]
+        job.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        logger.warning("Embedding failed for document %s: %s", document.id, exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    job.status = ProcessingStatus.completed
+    job.completed_at = datetime.now(timezone.utc)
+    db.commit()
+    logger.info("Embedded document %s via endpoint (%d chunks)", document.id, result["chunks_embedded"])
+    return EmbedResponse(
+        document_id=str(document.id),
+        status="completed",
+        chunks_embedded=result["chunks_embedded"],
+        model=result["model"],
+        message="Embeddings stored in the vector database. Use POST /api/v1/search to query.",
+    )
 
 
 @router.get("/{doc_id}/chunks", response_model=ChunkListResponse)

@@ -41,9 +41,12 @@ class Settings(BaseSettings):
     # Empty → real AWS S3. For Backblaze B2 use e.g. https://s3.us-west-004.backblazeb2.com
     S3_ENDPOINT_URL: str = ""
 
-    # AI / Embeddings
-    OPENAI_API_KEY: str = ""
-    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    # AI / Embeddings — Jina AI hosted embedding API (no OpenAI dependency)
+    JINA_API_KEY: str = ""
+    JINA_API_URL: str = "https://api.jina.ai/v1/embeddings"
+    EMBEDDING_MODEL: str = "jina-embeddings-v3"
+    EMBEDDING_DIMENSIONS: int = 1024
+    EMBEDDING_BATCH_SIZE: int = 64
     LLM_MODEL: str = "gpt-4o-mini"
 
     # Vector DB (Qdrant)

@@ -1,13 +1,96 @@
-from fastapi import APIRouter
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_current_user
+from app.database.session import get_db
+from app.models.models import Document, DocumentChunk, User
+from app.schemas.search import SearchRequest, SearchResponse, SearchHit
+from app.services.embeddings.base import EmbeddingError
+from app.services.embeddings.manager import embedding_available, get_embedding_provider
+from app.services.vector_store.qdrant_store import QdrantVectorStore, VectorStoreError
+from app.utils.logger import get_logger
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 
-@router.post("/search")
-def semantic_search():
-    return {"message": "Semantic search — coming in Phase 4"}
+@router.post("/search", response_model=SearchResponse)
+def semantic_search(
+    payload: SearchRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Semantic similarity search over embedded document chunks.
+
+    Flow: query → Jina query embedding (retrieval.query task) → Qdrant cosine
+    search with metadata filtering → chunk content hydrated from PostgreSQL.
+    The search is ALWAYS scoped to the authenticated user; a client can never
+    search another user's vectors.
+    """
+    if not embedding_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Semantic search is not configured — set JINA_API_KEY (and QDRANT_URL) on the server",
+        )
+
+    try:
+        query_vector = get_embedding_provider().embed_query(payload.query)
+        store = QdrantVectorStore.from_settings()
+        store.ensure_collection()
+        hits = store.search(
+            query_vector,
+            user_id=current_user.id,
+            limit=payload.limit,
+            document_id=payload.document_id,
+            mime_type=payload.mime_type,
+            source=payload.source.value if payload.source else None,
+        )
+    except (EmbeddingError, VectorStoreError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # Hydrate chunk content from PostgreSQL (payloads are metadata-only) and
+    # re-verify ownership while doing so (defense in depth).
+    results: list[SearchHit] = []
+    if hits:
+        chunk_ids = [UUID(str(hit["chunk_id"])) for hit in hits if hit.get("chunk_id")]
+        chunks = (
+            db.query(DocumentChunk)
+            .join(Document, DocumentChunk.document_id == Document.id)
+            .filter(DocumentChunk.id.in_(chunk_ids), Document.user_id == current_user.id)
+            .all()
+        )
+        chunks_by_id = {str(chunk.id): chunk for chunk in chunks}
+
+        for hit in hits:
+            if payload.min_score is not None and hit["score"] < payload.min_score:
+                continue
+            chunk = chunks_by_id.get(str(hit.get("chunk_id")))
+            if chunk is None:  # vector without a live chunk row → skip
+                continue
+            results.append(
+                SearchHit(
+                    score=hit["score"],
+                    chunk_id=str(chunk.id),
+                    chunk_index=chunk.chunk_index,
+                    page_number=chunk.page_number,
+                    content=chunk.content,
+                    token_count=chunk.token_count,
+                    document_id=hit.get("document_id"),
+                    file_name=hit.get("file_name"),
+                    mime_type=hit.get("mime_type"),
+                    source=hit.get("source"),
+                )
+            )
+
+    logger.info(
+        "Semantic search by %s (%d chars) → %d hits", current_user.email, len(payload.query), len(results)
+    )
+    return SearchResponse(query=payload.query, total=len(results), results=results)
 
 
 @router.post("/chat")
 def rag_chat():
+    """RAG chat — coming in Phase 5."""
     return {"message": "RAG chat — coming in Phase 5"}

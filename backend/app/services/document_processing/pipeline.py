@@ -29,6 +29,7 @@ from app.models.models import (
 from app.services.ocr import ocr
 from app.services.document_processing import extractors
 from app.services.document_processing.chunking import chunk_pages
+from app.services.embeddings.manager import embed_document_chunks, embedding_available
 from app.services.registry import get_cloud_service
 from app.services.table_extraction import extractor as table_extractor
 from app.utils.logger import get_logger
@@ -268,19 +269,45 @@ def _run_pipeline(db: Session, document: Document) -> dict:
                 token_count=chunk["token_count"],
             ))
         db.commit()
+
+        # ── Stage 6: embeddings (Phase 4 — Jina → Qdrant) ─────────────────
+        # Runs automatically when JINA_API_KEY is configured. When embeddings
+        # are NOT configured, this stage is skipped and Phase 3 behavior is
+        # unchanged. When embedding FAILS, the document is marked failed —
+        # never silently reported as successfully processed.
+        chunks_embedded = 0
+        if chunks and embedding_available():
+            try:
+                embed_result = _run_job(
+                    db, document, JobType.embedding,
+                    lambda: embed_document_chunks(db, document),
+                )
+                chunks_embedded = embed_result.get("chunks_embedded", 0)
+            except Exception as exc:
+                document.processing_status = ProcessingStatus.failed
+                db.commit()
+                summary.update(status="failed", error=f"Embedding stage failed: {exc}")
+                logger.warning("Embedding stage failed for document %s: %s", document.id, exc)
+                return summary
+        else:
+            summary["embedding_skipped"] = (
+                "Embeddings not configured — set JINA_API_KEY (and QDRANT_URL) to enable"
+            )
+
         summary.update(
             status="completed",
             pages_processed=len(pages),
             characters_extracted=sum(len(p.text) for p in pages),
             chunks_created=len(chunks),
+            chunks_embedded=chunks_embedded,
         )
 
         document.processing_status = ProcessingStatus.completed
         db.commit()
         logger.info(
-            "Processed document %s (%s): %d chars, %d tables, %d chunks",
+            "Processed document %s (%s): %d chars, %d tables, %d chunks, %d embedded",
             document.id, document.file_name,
-            summary["characters_extracted"], len(tables), len(chunks),
+            summary["characters_extracted"], len(tables), len(chunks), chunks_embedded,
         )
         return summary
 

@@ -1,6 +1,6 @@
 # AI-Powered Multi-Cloud File Intelligence Platform — Backend
 
-Phases 1–3 are complete.
+Phases 1–4 are complete.
 
 - **Phase 1** — FastAPI skeleton, config, PostgreSQL + SQLAlchemy models, logging, health check
 - **Phase 2** — JWT auth, Google Drive OAuth connector, S3-compatible storage connector
@@ -9,6 +9,9 @@ Phases 1–3 are complete.
 - **Phase 3** — Document processing pipeline: PDF / DOCX / TXT / CSV text extraction,
   OCR (Tesseract), table extraction (pdfplumber), token-aware chunking with overlap,
   per-stage job tracking
+- **Phase 4** — Embeddings & vector search: **Jina AI** embeddings (`jina-embeddings-v3`)
+  stored in **Qdrant**, automatic embedding during processing, semantic search with
+  metadata filtering and strict per-user isolation
 
 ### Prerequisites
 
@@ -230,6 +233,99 @@ silently producing empty text.
 
 ---
 
+## Phase 4 — Embeddings & semantic search (Jina AI + Qdrant)
+
+**Architecture — two separate roles:**
+
+| Role | Technology | Notes |
+|---|---|---|
+| Embedding generation | **Jina AI** (hosted embedding API) | `jina-embeddings-v3`, 1024 dimensions |
+| Vector storage & search | **Qdrant** (vector database) | cosine similarity, metadata filtering |
+
+There is **no OpenAI dependency** — Jina is reached over plain HTTP via the project's
+existing `httpx` client (no SDK required).
+
+### 1. Jina AI configuration
+
+Get a free API key at https://jina.ai/ and set it in `.env`:
+
+```env
+JINA_API_KEY=your-free-jina-key
+EMBEDDING_MODEL=jina-embeddings-v3
+EMBEDDING_DIMENSIONS=1024
+EMBEDDING_BATCH_SIZE=64
+JINA_API_URL=https://api.jina.ai/v1/embeddings
+```
+
+A free Jina key is sufficient for development and testing (rate limits apply — it is
+not unlimited). Document chunks are embedded with the `retrieval.passage` task and
+search queries with `retrieval.query`, as recommended for retrieval-oriented models.
+
+### 2. Qdrant configuration
+
+```bash
+# Option A — local Docker (free)
+docker run -d -p 6333:6333 -v qdrant_storage:/qdrant/storage qdrant/qdrant
+# → QDRANT_URL=http://localhost:6333
+
+# Option B — Qdrant Cloud (free tier available)
+# → QDRANT_URL=https://<your-cluster>.cloud.qdrant.io + QDRANT_API_KEY
+
+# Option C — embedded in-memory mode (tests only, no persistence)
+# → QDRANT_URL=:memory:
+```
+
+The collection is created automatically on first use: cosine distance, vector size =
+`EMBEDDING_DIMENSIONS`, payload indexes on the filterable fields. The test suite uses
+in-memory mode and never requires a running Qdrant server.
+
+### 3. How embeddings are stored
+
+Processing a document now ends with an embedding stage (when `JINA_API_KEY` is set):
+chunk texts → Jina embeddings → Qdrant vectors. Qdrant payloads carry **metadata only**
+(`user_id`, `document_id`, `chunk_id`, `chunk_index`, `page_number`, `source`,
+`file_name`, `mime_type`) — chunk text stays in PostgreSQL and is hydrated when search
+results are returned, so content is never duplicated in the vector store.
+
+If the embedding stage fails, the document is marked **failed** with the error recorded
+in its processing jobs — it never silently appears as successfully processed. Documents
+processed without a Jina key simply skip the stage (Phase 3 behavior unchanged).
+
+Backfill or retry embeddings for an already-processed document:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/documents/<DOC_ID>/embed" \
+  -H "Authorization: Bearer <TOKEN>"
+# → {"document_id": "...", "status": "completed", "chunks_embedded": 12, "model": "jina-embeddings-v3"}
+```
+
+The operation is retry-safe (existing vectors are replaced, never duplicated).
+
+### 4. Semantic search
+
+```bash
+curl -X POST http://localhost:8000/api/v1/search \
+  -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/json" \
+  -d '{"query": "quarterly revenue analysis", "limit": 5}'
+
+# with metadata filters:
+curl -X POST http://localhost:8000/api/v1/search \
+  -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/json" \
+  -d '{"query": "revenue", "source": "s3", "mime_type": "application/pdf", "min_score": 0.3}'
+
+# search within one document:
+curl -X POST http://localhost:8000/api/v1/search \
+  -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/json" \
+  -d '{"query": "revenue", "document_id": "<DOC_ID>"}'
+```
+
+Results are ranked by cosine similarity and include the matched chunk content,
+score, page number and document metadata. **User isolation is mandatory**: every
+search is scoped to the authenticated user's vectors — no user can ever retrieve
+another user's results.
+
+---
+
 ## Run tests
 
 ```bash
@@ -303,8 +399,10 @@ backend/
 | `CHUNK_SIZE_TOKENS`    | Target size for generated chunks          | No           |
 | `CHUNK_OVERLAP_TOKENS` | Overlap between consecutive chunks        | No           |
 | `OCR_MAX_PAGES`        | Maximum PDF pages processed by OCR        | No           |
-| `OPENAI_API_KEY`       | OpenAI API key                            | Phase 4      |
-| `QDRANT_URL`           | Qdrant vector DB URL                      | Phase 4      |
+| `JINA_API_KEY`         | Jina AI embedding key (free tier works)   | For Phase 4+ |
+| `EMBEDDING_MODEL`      | Jina embedding model                      | No (default) |
+| `EMBEDDING_DIMENSIONS` | Embedding vector size                     | No (default) |
+| `QDRANT_URL`           | Qdrant vector DB URL (or `:memory:`)      | For Phase 4+ |
 
 ---
 
@@ -333,8 +431,8 @@ backend/
 
 ---
 
-## Next Step — Phase 4
+## Next Step — Phase 5
 
-Embeddings & vector search: generate embeddings for the stored chunks
-(OpenAI `text-embedding-3-small`), configure Qdrant, store vectors with metadata,
-and implement similarity search with metadata filtering.
+Retrieval-Augmented Generation: query processing, semantic retrieval, context
+construction, LLM integration, source attribution and the RAG chat API — built on
+top of the Phase 4 embeddings and Qdrant search.
